@@ -1,0 +1,199 @@
+#################################################################################################################
+##### EasyQC-script to perform study-level and meta-level QC on imputed 1000G data
+##### EasyQC version: 9.0
+##### Programmer: Thomas Winkler, 2014-09-22
+##### Contact: thomas.winkler@klinik.uni-regensburg.de
+#################################################################################################################
+
+
+### Please DEFINE here format and input columns of the following EASYIN files
+DEFINE	--pathOut /data/nhubers/Twinning/GWAMA3/easyqc/output
+		--strMissing NA
+		--strSeparator TAB
+		--acolIn CHR;SNP;POS;A1;A2;N;AF1;T;SE_T;P_noSPA;BETA;SE;P;CONVERGE;INFO
+		--acolInClasses integer;character;integer;character;character;numeric;numeric;numeric;numeric;numeric;numeric;numeric;numeric;numeric;numeric
+		--acolNewName CHR;SNPID;POS;EFFECT_ALLELE;OTHER_ALLELE;N;EAF;T;SE_T;PVAL;BETA;SE;wrongP;CONVERGE;INFO
+
+## Please DO NOT CHANGE --acolNewName values because these reflect the column names used throughout the script
+## If the study used different column names, please amend the respective value at --acolIn, the column will then 
+## be automatically renamed to the respective --acolNewName value
+
+
+### Please DEFINE here all input files:
+#PUT THE INPUTFILES OVER HERE!!
+EASYIN   --fileIn /
+
+
+
+#################################################################################################################
+## EASYQC Scripting interface:
+START EASYQC
+
+####################
+## 1. Sanity checks: 
+
+CLEAN --rcdClean is.na(EFFECT_ALLELE)&is.na(OTHER_ALLELE) --strCleanName numDrop_Missing_Alleles
+CLEAN --rcdClean is.na(PVAL) --strCleanName numDrop_Missing_P
+CLEAN --rcdClean is.na(BETA) --strCleanName numDrop_Missing_BETA
+CLEAN --rcdClean is.na(SE) --strCleanName numDrop_Missing_SE
+CLEAN --rcdClean is.na(EAF) --strCleanName numDrop_Missing_EAF
+CLEAN --rcdClean is.na(N) --strCleanName numDrop_Missing_N
+CLEAN --rcdClean is.na(INFO) --strCleanName numDrop_Missing_Imputation
+#CLEAN --rcdClean is.na(HWE_PVAL) --strCleanName numDrop_Missing_HWE_PVAL
+
+CLEAN --rcdClean PVAL<0|PVAL>1 --strCleanName numDrop_invalid_PVAL
+CLEAN --rcdClean SE<=0|SE==Inf|SE>=10 --strCleanName numDrop_invalid_SE
+CLEAN --rcdClean abs(BETA)>=10 --strCleanName numDrop_invalid_BETA
+CLEAN --rcdClean EAF<0|EAF>1 --strCleanName numDrop_invalid_EAF
+CLEAN --rcdClean INFO<0 --strCleanName numDrop_invalid_IMPUTATION
+
+####################
+## 2. Prepare files for filtering and apply minimum thresholds: 
+
+## Exclude monomorphic SNPs:
+CLEAN --rcdClean (EAF==0)|(EAF==1) --strCleanName numDrop_Monomorph
+
+## Create column with minor allele count:
+ADDCOL --rcdAddCol signif(2*pmin(EAF,1-EAF)*N,4) --colOut MAC
+
+## If you do not want to apply filters at this stage, please comment out the following rows or amend the 
+## filter thresholds according to your needs. 
+#GETNUM 	--rcdGetNum IMPUTED==1 --strGetNumName num_Imputed
+#GETNUM 	--rcdGetNum IMPUTED==0 --strGetNumName num_Genotyped
+CLEAN --rcdClean N<30 --strCleanName numDrop_Nlt30
+CLEAN --rcdClean (EAF<=0.0001)|(EAF>=0.9999) --strCleanName numDrop_MAFlet0.01
+CLEAN --rcdClean (!is.na(INFO))&INFO<0.8 --strCleanName numDrop_lowImpQual
+#CLEAN --rcdClean HWE_PVAL<1E-5 --strCleanName numDrop_HWE_PVAL
+
+####################
+#### 3. Harmonization of allele coding (I/D)
+## The aim of this step is to compile uniform allele codes A/C/G/T or I/D from different versions f given alleles
+
+HARMONIZEALLELES 	--colInA1 EFFECT_ALLELE 
+					--colInA2 OTHER_ALLELE
+
+## Remove INDELs.
+CLEAN --rcdClean (EFFECT_ALLELE%in%c('I','D')) | (OTHER_ALLELE%in%c('I','D'))   --strCleanName numDrop_INDEL --blnWriteCleaned 1
+					
+####################
+## 4. Harmonization of marker names (compile 'cptid')
+
+CREATECPTID --fileMap /data/nhubers/Twinning/GWAMA3/easyqc/ALLELE_FREQ/rsmid.txt.gz
+			--colMapMarker rsmid
+			--colMapChr chr
+			--colMapPos pos
+			--colInMarker SNPID
+			--colInA1 EFFECT_ALLELE
+			--colInA2 OTHER_ALLELE
+			--colInChr CHR
+			--colInPos POS
+			
+## TO DO: 	Define the path to the reference file 'rsmid_map.1000G_ALL_p1v3.merged_mach_impute.v1.txt.gz' at --fileMap.		
+## 			The mapping file can be found on our website www.genepi-regensburg.de/easyqc.
+## 			In case CHR or POS are not given in the input files, please remove "--colInChr CHR" and "--colInPos POS" from the 
+## 			command and remove "CHR;POS;" from --acolIn and --acolNewName as well as the respective "character;integer;"
+## 			from --acolInClasses 
+
+####################
+## 5.Filter duplicate SNPs
+## This will count duplicates and throw out the SNP with the lower sample size:
+
+CLEANDUPLICATES --colInMarker cptid 
+				--strMode removeall
+				--colN N
+				
+## The duplicates are written to the output in a separate file "*duplicates.txt"
+
+####################
+## 6. AF Checks
+
+### TO DO: 	Define the path to the reference file 'allelefreq.1000G_[ANCESTRY]_p1v3.impute_legends.noMono.noDup.noX.v2.gz' at --fileRef:
+### 		Please use the reference file ancestry that matches the ancestry of the study
+
+MERGE 	--colInMarker cptid
+		--fileRef /data/nhubers/Twinning/GWAMA3/easyqc/ALLELE_FREQ/HRC_r11.afref.txt.gz
+			--acolIn cptid;ea;oa;eaf 
+			--acolInClasses character;character;character;numeric
+		--strRefSuffix .ref
+		--colRefMarker cptid
+		--blnWriteNotInRef 1
+
+ADJUSTALLELES 	--colInStrand STRAND
+				--colInA1 EFFECT_ALLELE 
+				--colInA2 OTHER_ALLELE 
+				--colInFreq EAF
+				--colInBeta BETA
+				--colRefA1 ea.ref
+				--colRefA2 oa.ref
+				--blnMetalUseStrand 1
+				--blnRemoveMismatch 1
+				--blnRemoveInvalid 1
+
+## All mismatches will be removed (e.g. A/T in input, A/C in reference)		
+				
+AFCHECK --colInFreq EAF
+		--colRefFreq eaf.ref
+		--numLimOutlier 0.2
+		--blnPlotAll 1
+
+## blnPlotAll 0 causes that only outlying SNPs with |Freq-Freq.ref|>0.2 will be plotted (way less computational time)
+
+####################
+## 7. Rearrange columns and Write CLEANED output
+
+GETCOLS --acolOut cptid;SNPID;EFFECT_ALLELE;OTHER_ALLELE;EAF;INFO;BETA;SE;PVAL;N;MAC
+
+WRITE	--strPrefix CLEANED. 
+		--strMissing . 
+		--strMode gz
+
+####################
+## 8.  Plot Z versus P
+
+PZPLOT	--colBeta BETA 
+		--colSe SE 
+		--colPval PVAL
+
+####################
+## 9.  QQ plot
+
+QQPLOT	--acolQQPlot PVAL
+		--numPvalOffset 0.05
+		--strMode subplot
+		
+####################
+## 9.5	Scatterplot
+
+SPLOT	--rcdSPlotX EAF
+		--rcdSPlotY	-log10 (PVAL)
+		--strDefaultColour black
+		--numDefaultSymbol 20
+		--arcdColourCrit N<110000; N<80000
+		--astrColour purple;red
+		--arcdSymbolCrit (EAF<=0.05|EAF>=0.95); (EAF<=0.01|EAF>0.99)
+		--anumSymbol 0;1
+		--strAxes lim(0,NULL,0,NULL)
+		--strTitle Scatterplot
+		--arcdAdd2Plot abline(v=0.05);abline(v=0.95);abline(h=-log10(5e-8))
+
+####################
+## 10. Summary Stats post-QC
+
+CALCULATE --rcdCalc max(N,na.rm=T) --strCalcName N_max
+GC	--colPval PVAL --blnSuppressCorrection 1
+
+## Get number of SNPs with pvalue < 5e-8 in different file
+
+CRITERION	--rcdCrit PVAL<=5e-8
+			--strCritName numSNP_sig
+			
+## Get number of SNPs with large Beta and SE.
+GETNUM --rcdGetNum SE>=10 --strGetNumName num_large_SE
+GETNUM --rcdGetNum abs(BETA)>=10 --strGetNumName num_large_BETA
+
+CALCULATE --rcdCalc median(SE,na.rm=T) --strCalcName SE_median
+
+		
+STOP EASYQC
+#################################################################################################################
+#################################################################################################################
