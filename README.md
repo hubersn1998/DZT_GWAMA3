@@ -1,5 +1,5 @@
 # DZT_GWAMA3
-The script used for the third GWAMA for DZT from the preprint/publication: 
+The script used for the third GWAMA for DZT from the preprint "Combined genome-wide association studies in humans and cattle: Cross-species genetic insights into dizygotic twinning" (https://www.medrxiv.org/content/10.64898/2026.11.16.26367253v1) 
 
 This repository includes:
 - Three scripts that were included in the SOP of the Twinning Genetics Consortium, called Script_step_0.sh, Script_step_1.sh, and Script_step_2.sh.
